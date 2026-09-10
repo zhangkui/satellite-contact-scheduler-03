@@ -1,0 +1,31 @@
+html, body, #app {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  background: #f0f2f5;
+}
+
+.page-container {
+  padding: 16px;
+}
+
+.section-card {
+  margin-bottom: 16px;
+}
+
+.mono {
+  font-family: 'JetBrains Mono', Consolas, Menlo, monospace;
+}
+
+.conflict-row {
+  background: #fef0f0;
+}
+
+:root {
+  --sat-color-1: #409eff;
+  --sat-color-2: #67c23a;
+  --sat-color-3: #e6a23c;
+  --sat-color-4: #909399;
+}
