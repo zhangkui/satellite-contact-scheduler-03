@@ -21,6 +21,9 @@
           </el-select>
         </el-form-item>
         <el-form-item>
+          <el-button :loading="prechecking" data-test="btn-precheck" @click="doPrecheck">
+            预检分析
+          </el-button>
           <el-button type="primary" :loading="generating" @click="doGenerate">
             {{ draftId ? '追加自动排程' : '生成排程草稿' }}
           </el-button>
@@ -127,6 +130,21 @@
               </template>
             </el-table-column>
           </el-table>
+        </el-card>
+      </el-tab-pane>
+
+      <!-- ============ 预检报告 ============ -->
+      <el-tab-pane :label="`预检报告${precheckReport ? ' #' + precheckReport.id : ''}`" name="precheck">
+        <el-card v-loading="prechecking">
+          <PrecheckPanel
+            :report="precheckReport"
+            :reports="precheckReports"
+            :generating="precheckGenerating"
+            @locate="onPrecheckLocate"
+            @generate="onPrecheckGenerate"
+            @goto="onPrecheckGoto"
+            @view="onPrecheckView"
+          />
         </el-card>
       </el-tab-pane>
 
@@ -256,11 +274,16 @@ import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import GanttChart from '@/components/GanttChart.vue'
-import { resourceApi, scheduleApi } from '@/api'
+import PrecheckPanel from '@/components/PrecheckPanel.vue'
+import { precheckApi, resourceApi, scheduleApi } from '@/api'
 import type { ApiError } from '@/api/http'
-import type { ConflictInfo, GenerateResult, GanttData, PassTask, VisibilityWindow } from '@/types'
+import type {
+  ConflictInfo, GenerateResult, GanttData, PassTask, PrecheckReport, VisibilityWindow
+} from '@/types'
 import { useResourceStore } from '@/stores/resource'
-import { ACTION_LABELS, addDaysUtc, fmtDateTime, fmtTime, parseTime, toUtcIso, utcDate } from '@/utils/time'
+import {
+  ACTION_LABELS, CONFLICT_LABELS, addDaysUtc, fmtDateTime, fmtTime, parseTime, toUtcIso, utcDate
+} from '@/utils/time'
 
 const router = useRouter()
 const store = useResourceStore()
@@ -308,6 +331,86 @@ async function doGenerate() {
     handleApiError(e, '自动排程失败')
   } finally {
     generating.value = false
+  }
+}
+
+// ---------- 预检 ----------
+const prechecking = ref(false)
+const precheckGenerating = ref(false)
+const precheckReport = ref<PrecheckReport>()
+const precheckReports = ref<PrecheckReport[]>([])
+
+async function doPrecheck() {
+  if (!genRange.value) {
+    ElMessage.warning('请选择排程时间范围')
+    return
+  }
+  prechecking.value = true
+  try {
+    precheckReport.value = await precheckApi.run({
+      rangeStart: toUtcIso(genRange.value[0]),
+      rangeEnd: toUtcIso(genRange.value[1]),
+      stationIds: genStations.value.length ? genStations.value : undefined,
+      satelliteIds: genSatellites.value.length ? genSatellites.value : undefined,
+      operator: 'scheduler'
+    })
+    const s = precheckReport.value.summary
+    if (precheckReport.value.cached) {
+      ElMessage.info('命中同参数历史预检报告，未重复分析')
+    } else {
+      ElMessage.success(`预检完成：可排 ${s?.schedulableCount ?? 0}，必然落选 ${s?.rejectedCount ?? 0}`)
+    }
+    tab.value = 'precheck'
+    await loadPrecheckList()
+  } catch (e) {
+    handleApiError(e, '预检分析失败')
+  } finally {
+    prechecking.value = false
+  }
+}
+
+async function loadPrecheckList() {
+  precheckReports.value = await precheckApi.list()
+}
+
+async function onPrecheckView(r: PrecheckReport) {
+  precheckReport.value = await precheckApi.detail(r.id)
+}
+
+/** 依据预检生成草稿：始终新建草稿版本，不改变既有草稿。 */
+async function onPrecheckGenerate(report: PrecheckReport) {
+  precheckGenerating.value = true
+  try {
+    const { result } = await precheckApi.generate(report.id, 'scheduler')
+    lastResult.value = result
+    ElMessage.success(`已依据预检报告 #${report.id} 生成草稿 #${result.versionId}：` +
+      `入选 ${result.scheduledCount}，落选 ${result.rejectedCount}`)
+    await loadDraft()
+    await loadGantt()
+    tab.value = 'tasks'
+  } catch (e) {
+    handleApiError(e, '依据预检生成草稿失败')
+  } finally {
+    precheckGenerating.value = false
+  }
+}
+
+/** 从预检摘要/明细跳转到冲突定位视图。 */
+function onPrecheckLocate(conflicts: ConflictInfo[]) {
+  activeConflicts.value = conflicts
+  tab.value = 'gantt'
+  flashLaneId.value = firstConflictStation()
+}
+
+/** 从预检摘要跳转到甘特图（定位到报告范围首日）或资源管理。 */
+function onPrecheckGoto(view: 'gantt' | 'resources') {
+  if (view === 'gantt') {
+    if (precheckReport.value) {
+      store.filterDate = precheckReport.value.rangeStart.slice(0, 10)
+    }
+    router.push('/gantt')
+  } else {
+    router.push('/resources')
   }
 }
 
@@ -547,13 +650,7 @@ function statusLabel(s: string) {
   return { DRAFT: '草稿', PUBLISHED: '已发布', CANCELLED: '已取消' }[s] ?? s
 }
 function conflictLabel(t: string) {
-  return {
-    STATION_OVERLAP: '同站时间重叠',
-    MAINTENANCE_BLOCK: '维护封锁',
-    ANTENNA_CAPABILITY: '天线能力不足',
-    WINDOW_ALREADY_SCHEDULED: '窗口已安排',
-    INVALID_TIME_RANGE: '时间非法'
-  }[t] ?? t
+  return CONFLICT_LABELS[t] ?? t
 }
 function conflictTagType(t: string) {
   return t === 'MAINTENANCE_BLOCK' ? 'warning' : 'danger'
@@ -564,7 +661,9 @@ function actionLabel(a: string) {
 function auditColor(a: string) {
   return ({
     GENERATE: 'primary', ADD: 'success', ADJUST: 'warning',
-    CANCEL: 'info', REMOVE: 'danger', PUBLISH: 'success', REVISE: 'primary'
+    CANCEL: 'info', REMOVE: 'danger', PUBLISH: 'success', REVISE: 'primary',
+    PRECHECK_START: 'info', PRECHECK_DONE: 'success', PRECHECK_FAIL: 'danger',
+    PRECHECK_GEN: 'primary'
   } as Record<string, string>)[a] as any
 }
 function pretty(json?: string) {

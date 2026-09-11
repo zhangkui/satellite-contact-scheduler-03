@@ -129,14 +129,41 @@ CREATE TABLE IF NOT EXISTS pass_task (
 
 CREATE TABLE IF NOT EXISTS schedule_audit (
     id           BIGINT      NOT NULL AUTO_INCREMENT,
-    version_id   BIGINT      NOT NULL,
+    version_id   BIGINT      NULL COMMENT '关联排程版本；预检类审计无版本，为 NULL',
     task_id      BIGINT      NULL,
-    action       VARCHAR(16) NOT NULL COMMENT 'GENERATE/ADD/ADJUST/CANCEL/REMOVE/PUBLISH',
+    action       VARCHAR(16) NOT NULL COMMENT 'GENERATE/ADD/ADJUST/CANCEL/REMOVE/PUBLISH/REVISE/PRECHECK_START/PRECHECK_DONE/PRECHECK_FAIL/PRECHECK_GEN',
     before_json  LONGTEXT    NULL COMMENT '调整前对象',
-    after_json   LONGTEXT    NULL COMMENT '调整后对象',
+    after_json   LONGTEXT    NULL COMMENT '调整后对象（操作人、请求关联信息沿用该 JSON 载荷语义）',
     detail       VARCHAR(255) NULL,
     created_at   DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
     KEY idx_audit_version (version_id),
     CONSTRAINT fk_audit_version FOREIGN KEY (version_id) REFERENCES schedule_version (id)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT ='排程调整审计(前后版本)';
+
+-- =====================================================================
+-- 预检报告：按 排程范围 + 站点/卫星筛选（request_hash）幂等持久化，
+-- 同一参数重复请求直接返回既有报告，不产生重复分析记录、不触碰任何草稿。
+-- data_version 记录分析所依据的数据指纹（窗口/任务/封锁/天线的数量与最近更新时间）。
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS precheck_report (
+    id                BIGINT      NOT NULL AUTO_INCREMENT,
+    request_hash      CHAR(64)    NOT NULL COMMENT '请求参数 SHA-256（范围+筛选归一化）',
+    range_start       DATETIME    NOT NULL COMMENT '排程范围起(UTC)',
+    range_end         DATETIME    NOT NULL COMMENT '排程范围止(UTC)',
+    station_ids       VARCHAR(255) NULL COMMENT '站点筛选 JSON 数组，空为全部',
+    satellite_ids     VARCHAR(255) NULL COMMENT '卫星筛选 JSON 数组，空为全部',
+    data_version      VARCHAR(255) NULL COMMENT '分析所依据的数据版本指纹',
+    status            VARCHAR(16) NOT NULL DEFAULT 'RUNNING' COMMENT 'RUNNING/COMPLETED/FAILED',
+    total_windows     INT         NOT NULL DEFAULT 0 COMMENT '范围内可见窗口总数',
+    schedulable_count INT         NOT NULL DEFAULT 0 COMMENT '可排窗口数',
+    rejected_count    INT         NOT NULL DEFAULT 0 COMMENT '必然落选窗口数',
+    summary_json      LONGTEXT    NULL COMMENT '指标摘要（冲突类型计数/受影响资源/告警）',
+    detail_json       LONGTEXT    NULL COMMENT '逐窗口分析明细（含冲突对象与时间段）',
+    error_message     VARCHAR(500) NULL COMMENT '失败原因',
+    operator          VARCHAR(64) NOT NULL DEFAULT 'scheduler' COMMENT '触发预检的操作人',
+    created_at        DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at        DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_precheck_hash (request_hash)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT ='排程预检报告(幂等)';

@@ -101,7 +101,7 @@ export interface ScheduleVersion {
 
 export interface ConflictInfo {
   type: 'STATION_OVERLAP' | 'MAINTENANCE_BLOCK' | 'ANTENNA_CAPABILITY' |
-        'WINDOW_ALREADY_SCHEDULED' | 'INVALID_TIME_RANGE' | string
+        'WINDOW_ALREADY_SCHEDULED' | 'RESOURCE_DISABLED' | 'INVALID_TIME_RANGE' | string
   reason: string
   overlapStart?: string
   overlapEnd?: string
@@ -154,4 +154,63 @@ export interface GanttData {
   draftVersion: ScheduleVersion | null
   publishedTasks: PassTask[]
   draftTasks: PassTask[]
+}
+
+// ---------------- 预检 ----------------
+
+export interface PrecheckSummary {
+  totalWindows: number
+  schedulableCount: number
+  rejectedCount: number
+  crossMidnightWindows: number
+  rangeCrossesMidnight: boolean
+  /** 潜在冲突类型 → 受影响窗口数。 */
+  conflictTypeCounts: Record<string, number>
+  /** 受影响资源 id 列表。 */
+  affectedResources: {
+    stationIds: number[]
+    antennaIds: number[]
+    satelliteIds: number[]
+    maintenanceBlockIds: number[]
+    blockingTaskIds: number[]
+  }
+  warnings: string[]
+}
+
+export interface PrecheckWindowDetail {
+  windowId: number
+  satelliteId: number
+  stationId: number
+  startTime: string
+  endTime: string
+  priority: number
+  crossMidnight: boolean
+  windowStatus: string
+  verdict: 'SCHEDULABLE' | 'REJECTED'
+  antennaId?: number
+  conflicts: ConflictInfo[]
+}
+
+export interface PrecheckReport {
+  id: number
+  requestHash: string
+  rangeStart: string
+  rangeEnd: string
+  stationIds: number[]
+  satelliteIds: number[]
+  /** 分析所依据的数据版本指纹。 */
+  dataVersion?: string
+  status: 'RUNNING' | 'COMPLETED' | 'FAILED'
+  totalWindows: number
+  schedulableCount: number
+  rejectedCount: number
+  summary?: PrecheckSummary
+  /** 逐窗口明细（仅详情接口返回）。 */
+  windows?: PrecheckWindowDetail[]
+  errorMessage?: string
+  operator: string
+  createdAt: string
+  updatedAt?: string
+  /** true 表示命中同参数既有报告，未重复分析。 */
+  cached?: boolean
 }

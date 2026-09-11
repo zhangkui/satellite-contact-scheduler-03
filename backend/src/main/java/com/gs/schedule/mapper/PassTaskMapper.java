@@ -43,4 +43,21 @@ public interface PassTaskMapper extends BaseMapper<PassTask> {
                                   @Param("baseVersionId") Long baseVersionId,
                                   @Param("start") LocalDateTime start,
                                   @Param("end") LocalDateTime end);
+
+    /**
+     * 窗口在“有效版本”（DRAFT / PUBLISHED，不含 SUPERSEDED）中的活动任务，
+     * 预检用于定位 WINDOW_ALREADY_SCHEDULED 的占用任务。
+     */
+    @Select("""
+            SELECT t.* FROM pass_task t
+            JOIN schedule_version v ON t.version_id = v.id
+            WHERE t.window_id = #{windowId}
+              AND t.status <> 'CANCELLED'
+              AND v.status <> 'SUPERSEDED'
+            """)
+    List<PassTask> selectActiveByWindow(@Param("windowId") Long windowId);
+
+    /** 数据版本指纹用：任务最近更新时间。 */
+    @Select("SELECT MAX(updated_at) FROM pass_task")
+    String maxUpdatedAt();
 }

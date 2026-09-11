@@ -1,7 +1,7 @@
 import http from './http'
 import type {
   Antenna, GenerateResult, GanttData, GroundStation, MaintenanceBlock,
-  PassTask, ScheduleAudit, ScheduleVersion, Satellite, VisibilityWindow
+  PassTask, PrecheckReport, ScheduleAudit, ScheduleVersion, Satellite, VisibilityWindow
 } from '@/types'
 
 // ---------------- 资源 ----------------
@@ -61,4 +61,24 @@ export const scheduleApi = {
     http.post<any, PassTask>(`/api/tasks/${id}/cancel`, { reason }),
 
   removeTask: (id: number) => http.delete<any, void>(`/api/tasks/${id}`)
+}
+
+// ---------------- 预检 ----------------
+export interface PrecheckPayload {
+  rangeStart: string
+  rangeEnd: string
+  stationIds?: number[]
+  satelliteIds?: number[]
+  operator?: string
+  /** true 时按相同参数重新分析并覆盖既有报告（仍不产生重复记录）。 */
+  refresh?: boolean
+}
+
+export const precheckApi = {
+  run: (payload: PrecheckPayload) => http.post<any, PrecheckReport>('/api/precheck', payload),
+  list: () => http.get<any, PrecheckReport[]>('/api/precheck'),
+  detail: (id: number) => http.get<any, PrecheckReport>(`/api/precheck/${id}`),
+  generate: (id: number, operator = 'scheduler') =>
+    http.post<any, { reportId: number; result: GenerateResult }>(
+      `/api/precheck/${id}/generate`, { operator })
 }

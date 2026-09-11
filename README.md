@@ -3,6 +3,8 @@
 根据卫星轨道可见窗口（AOS/LOS）、地面站天线能力、维护封锁区间与任务优先级生成过站排程。
 支持草稿调整、冲突检测（409 返回冲突对象与时间段）、任务取消释放窗口、乐观锁并发控制、
 版本快照与修订发布，并提供窗口甘特图、冲突定位、版本对比与发布确认界面。
+内置**排程预检**：在不触碰草稿的前提下干跑排程规则，输出可排窗口数、必然落选窗口、
+潜在冲突类型与受影响资源，报告按排程参数幂等持久化，可一键依据预检生成草稿。
 
 - **后端**：Java 17 · Spring Boot 3.3 · MyBatis-Plus 3.5 · MySQL 8 · Redis 7
 - **前端**：Vue 3 · TypeScript · Vite 5 · Element Plus · Pinia · Axios
@@ -28,6 +30,8 @@ docker compose up --build
 首次启动时 MySQL 自动执行 `db/schema.sql`（建表）与 `db/seed.sql`（种子数据）。
 > 种子时间相对“容器初始化当天 UTC”动态生成，因此首次启动当天演示效果最完整；
 > 切换历史日期可通过页面右上角日期选择器。
+> 既有数据库升级预检功能：执行 `db/migration-precheck.sql`
+> （`schedule_audit.version_id` 改可空 + 新建 `precheck_report`）。
 
 健康检查通过后后端才启动，无需手工干预。
 
@@ -46,19 +50,24 @@ cd frontend && npm install && npm run dev
 ## 二、五分钟演示流程
 
 1. 打开 http://localhost ，进入 **排程工作台**，时间范围默认“当天 00:00–23:59 (UTC)”。
-2. 点击 **生成排程草稿**：
+2. 点击 **预检分析**（不落库的干跑）：
+   - “预检报告”页签展示指标摘要（窗口总数 / 可排 / 必然落选 / 跨午夜）、潜在冲突类型计数、
+     受影响资源与逐窗口冲突明细；点击冲突标签跳转 **冲突定位视图**，顶部按钮跳转
+     **窗口甘特图 / 资源管理**；同一参数重复预检命中历史报告，不产生重复记录。
+   - 点击 **依据预检生成草稿** 直接按报告参数生成排程草稿（始终新建草稿，不改变既有草稿）。
+3. 点击 **生成排程草稿**：
    - 入选 5 个任务、落选 4 个窗口（被高优先级挤掉 / 命中维护封锁 / 同站重叠）。
    - “落选与冲突”页签中每个落选窗口都带 **冲突对象 + 冲突时间段**，点击标签可跳转定位。
-3. 在 **冲突定位视图** 查看甘特图：红色脉冲条即冲突时间段，维护封锁为橙色斜纹，
+4. 在 **冲突定位视图** 查看甘特图：红色脉冲条即冲突时间段，维护封锁为橙色斜纹，
    跨午夜条带 🌙 标记（北京 23:40–次日 00:05 等）。
-4. 在任务清单对任意任务点 **调整**（改时间/天线/优先级，携带乐观锁版本号）：
+5. 在任务清单对任意任务点 **调整**（改时间/天线/优先级，携带乐观锁版本号）：
    - 改成与其它任务重叠的时段提交 → 收到 **HTTP 409**，弹出冲突对象与时段，调整不落库。
-5. 点 **取消释放**：任务置为 CANCELLED，可见窗口状态立即恢复 `AVAILABLE`，可重新安排。
-6. 点 **去发布** 进入发布确认页 → 勾选确认 → **确认发布**（得到 v1）。
+6. 点 **取消释放**：任务置为 CANCELLED，可见窗口状态立即恢复 `AVAILABLE`，可重新安排。
+7. 点 **去发布** 进入发布确认页 → 勾选确认 → **确认发布**（得到 v1）。
    - 再次点发布/对该版本做任何修改 → 409 拒绝，提示只能通过新版本修订。
-7. 回到 **版本管理与对比**，对 v1 点 **创建修订版**，在新草稿中调整后发布得到 v2，
+8. 回到 **版本管理与对比**，对 v1 点 **创建修订版**，在新草稿中调整后发布得到 v2，
    然后选择 v1 / v2 **开始对比**：列出新增、删除、逐字段修改（旧值 → 新值）。
-8. 顶部筛选支持按 **日期 / 地面站 / 卫星** 过滤；可切换 **UTC / 站址本地时区** 显示。
+9. 顶部筛选支持按 **日期 / 地面站 / 卫星** 过滤；可切换 **UTC / 站址本地时区** 显示。
 
 ### 种子数据内置的典型场景
 
@@ -137,7 +146,7 @@ HTTP/1.1 409 Conflict
 
 冲突类型：`STATION_OVERLAP`（同站重叠）、`MAINTENANCE_BLOCK`（维护封锁）、
 `ANTENNA_CAPABILITY`（天线不存在/停用/频段不支持）、`WINDOW_ALREADY_SCHEDULED`（窗口已有任务）、
-`INVALID_TIME_RANGE`。
+`RESOURCE_DISABLED`（地面站/卫星已禁用，预检产出）、`INVALID_TIME_RANGE`。
 
 前端拦截 409 后不弹通用错误，而是在“冲突定位视图”以红色脉冲条渲染 `overlapStart~overlapEnd`，
 支持逐站闪烁定位。
@@ -174,6 +183,26 @@ HTTP/1.1 409 Conflict
 - 版本对比优先读取发布快照（已取代版本也可对比），以 `windowId` 为主键输出
   `added / removed / changed / unchanged`，修改项逐字段给出 `before → after`。
 
+### 8. 排程预检（干跑分析，幂等持久化）
+
+- 预检按与自动排程**相同的候选集与贪心顺序**（优先级降序、AOS 升序）在内存中干跑，
+  综合可见窗口、卫星频段、启用天线、维护封锁、已有活动任务与同站时间重叠规则，
+  输出 **可排窗口数、必然落选窗口、潜在冲突类型计数与受影响资源**
+  （地面站/天线/卫星/维护封锁/占用任务）；预检全程只读，不触碰任何草稿；
+- **幂等持久化**：报告按 `request_hash`（排程范围 + 站点/卫星筛选归一化 SHA-256）唯一存储，
+  并记录数据版本指纹（窗口/任务/封锁/天线的行数与最近更新时间）；
+  同一参数重复请求直接返回既有报告（`cached=true`），不产生重复分析记录；
+  `refresh=true` 可按同参数重新分析并覆盖原记录（仍不产生重复行）；
+- **边界情况**：空范围（无窗口）正常出报告并给出告警；跨午夜范围与跨日期窗口按
+  UTC 连续半开区间处理并计数；结束时间不晚于开始时间、范围为空返回 400 且写失败审计；
+  禁用地面站/卫星产出 `RESOURCE_DISABLED` 冲突；错误信息均定位到具体资源或窗口；
+- **审计**：预检开始（`PRECHECK_START`）、完成（`PRECHECK_DONE`）、失败（`PRECHECK_FAIL`）
+  与依据预检生成草稿（`PRECHECK_GEN`）均写 `schedule_audit`，操作人与请求关联信息
+  （报告 id、请求参数、新版本 id）放在 `after_json`，沿用现有审计载荷语义；
+  预检类审计 `version_id` 为空，`PRECHECK_GEN` 关联新建草稿版本；
+- **依据预检生成草稿**：`POST /api/precheck/{id}/generate` 按报告参数生成排程，
+  始终新建草稿版本（不回传 versionId），不改变任何既有草稿。
+
 ---
 
 ## 四、API 一览
@@ -189,6 +218,9 @@ HTTP/1.1 409 Conflict
 | POST/DELETE | `/api/windows` `/api/windows/{id}` | 窗口维护 |
 | GET/POST/DELETE | `/api/maintenance[...]` | 维护封锁区间维护 |
 | GET | `/api/gantt?date=&stationId=&satelliteId` | 甘特图聚合（窗口/封锁/最新草稿/最新发布任务） |
+| POST | `/api/precheck` | 排程预检（干跑）；同参数命中既有报告返回 `cached=true` |
+| GET | `/api/precheck` `/api/precheck/{id}` | 预检报告列表 / 详情（含指标摘要与逐窗口冲突明细） |
+| POST | `/api/precheck/{id}/generate` | 依据预检报告参数生成排程草稿（始终新建草稿） |
 | POST | `/api/schedule/generate` | 生成/追加排程草稿，返回入选 + 落选冲突明细 |
 | GET | `/api/versions` `/api/versions/{id}?includeCancelled=` | 版本列表/详情（任务+审计） |
 | POST | `/api/versions/{id}/publish` | 发布（body：`{"operator":"zhang"}`） |
@@ -203,6 +235,13 @@ HTTP/1.1 409 Conflict
 
 ```bash
 curl http://localhost:8080/api/stations
+# 预检（干跑，不落库；重复执行返回同一报告）
+curl -X POST http://localhost:8080/api/precheck \
+  -H 'Content-Type: application/json' \
+  -d '{"rangeStart":"2026-09-10T00:00:00Z","rangeEnd":"2026-09-10T23:59:00Z","operator":"zhang"}'
+# 依据预检报告 #1 生成草稿
+curl -X POST http://localhost:8080/api/precheck/1/generate \
+  -H 'Content-Type: application/json' -d '{"operator":"zhang"}'
 curl -X POST http://localhost:8080/api/schedule/generate \
   -H 'Content-Type: application/json' \
   -d '{"rangeStart":"2026-09-10T00:00:00Z","rangeEnd":"2026-09-10T23:59:00Z"}'
@@ -220,7 +259,8 @@ visibility_window  可见窗口 AOS/LOS（UTC）、首选天线、优先级、AV
 maintenance_block  维护封锁（antenna_id 为空=全站封锁）
 schedule_version   排程版本（DRAFT/PUBLISHED/SUPERSEDED、版本号、范围、JSON 快照）
 pass_task          过站任务（版本、窗口、站、天线、起止、优先级、状态、version 乐观锁）
-schedule_audit     调整审计（动作、before_json、after_json）
+schedule_audit     调整审计（动作、before_json、after_json；预检类 version_id 为空）
+precheck_report    预检报告（request_hash 幂等、数据版本指纹、指标摘要与逐窗口明细 JSON）
 ```
 
 关键索引：窗口/任务/封锁表均有 `(start_time, end_time)` 与站点索引；
@@ -246,15 +286,19 @@ schedule_audit     调整审计（动作、before_json、after_json）
 │       ├── service/
 │       │   ├── ScheduleConflictDetector.java  # 重叠/封锁/能力检测
 │       │   ├── ScheduleService.java           # 生成/调整/取消/发布/修订/对比
+│       │   ├── PrecheckService.java           # 预检干跑分析/幂等持久化/依据预检生成
 │       │   ├── ResourceService.java  ViewAssembler.java  AuditService.java
-│       └── controller/         # ResourceController、ScheduleController
+│       └── controller/         # ResourceController、ScheduleController、PrecheckController
+│       └── test/               # PrecheckServiceTest（规则/跨午夜/无天线/任务占用/幂等）
 └── frontend/
     ├── Dockerfile nginx.conf   # 构建静态资源 + Nginx 反代 /api
     └── src/
         ├── api/                # axios（409 冲突对象透传）、接口封装
         ├── stores/             # Pinia 资源与全局筛选
         ├── components/GanttChart.vue          # 24h 泳道甘特/封锁斜纹/冲突脉冲
+        ├── components/PrecheckPanel.vue       # 预检摘要/冲突明细/历史报告/跳转操作
         └── views/              # 甘特图、工作台、版本对比、发布确认、资源管理
+    └── tests/                  # vitest 预检面板交互测试（npm test）
 ```
 
 ## 七、生产化备注

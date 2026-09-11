@@ -95,5 +95,18 @@ export const ACTION_LABELS: Record<string, string> = {
   CANCEL: '取消',
   REMOVE: '移除',
   PUBLISH: '发布',
-  REVISE: '修订'
+  REVISE: '修订',
+  PRECHECK_START: '预检开始',
+  PRECHECK_DONE: '预检完成',
+  PRECHECK_FAIL: '预检失败',
+  PRECHECK_GEN: '预检生成'
+}
+
+export const CONFLICT_LABELS: Record<string, string> = {
+  STATION_OVERLAP: '同站时间重叠',
+  MAINTENANCE_BLOCK: '维护封锁',
+  ANTENNA_CAPABILITY: '天线能力不足',
+  WINDOW_ALREADY_SCHEDULED: '窗口已安排',
+  RESOURCE_DISABLED: '资源禁用',
+  INVALID_TIME_RANGE: '时间非法'
 }
